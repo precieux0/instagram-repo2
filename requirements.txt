@@ -1,2 +1,2 @@
-instagrapi==1.16.42
-pillow>=10.0.0
+instagrapi
+flask
