@@ -5,7 +5,9 @@ builder = "nixpacks"
 startCommand = "python bot.py"
 
 [service]
-# Active l'exposition du service
 expose = true
-# Définit le port sur lequel ton bot écoute
 port = 8080
+
+[variables]
+INSTAGRAM_USERNAME = "del.una99"
+INSTAGRAM_PASSWORD = "precieux243"
