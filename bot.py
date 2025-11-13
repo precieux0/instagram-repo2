@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from flask import Flask, jsonify
 import threading
 from waitress import serve
-import requests
+import uuid
 
 # Configuration logging
 logging.basicConfig(
@@ -80,7 +80,7 @@ class SmartInstagramBot:
             }
             
             self.cl.set_settings(settings)
-            self.cl.delay_range = [15, 30]  # Délais plus longs
+            self.cl.delay_range = [15, 30]
             self.cl.request_timeout = 30
             return True
         except Exception as e:
@@ -89,7 +89,6 @@ class SmartInstagramBot:
     
     def generate_uuid(self):
         """Générer un UUID unique"""
-        import uuid
         return str(uuid.uuid4())
     
     def manual_login_flow(self):
@@ -101,16 +100,16 @@ class SmartInstagramBot:
             if os.path.exists("session.json"):
                 os.remove("session.json")
             
-            # Réinitialiser le client
+            # Réinitialiser le client avec nouvelle configuration
             self.cl = Client()
-            self.setup_client_advanced()
+            if not self.setup_client_advanced():
+                return False
             
-            # Ajouter des headers personnalisés
-            self.cl.set_contact_signup(False)
+            # Délai important avant connexion
+            logger.info("⏳ Préparation de la connexion...")
+            time.sleep(10)
             
-            # Tentative de connexion avec gestion d'erreur
-            time.sleep(10)  # Délai important
-            
+            # Tentative de connexion
             logger.info(f"🔐 Connexion pour {USERNAME}...")
             login_result = self.cl.login(USERNAME, PASSWORD)
             
