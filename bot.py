@@ -8,7 +8,8 @@ import os
 from datetime import datetime, timedelta
 from flask import Flask, jsonify
 import threading
-from waitress import serve  # Serveur production pour Windows
+from waitress import serve
+import requests
 
 # Configuration logging
 logging.basicConfig(
@@ -50,88 +51,123 @@ class SmartInstagramBot:
         self.bot_status = "initializing"
         self.last_error = None
         
-    def setup_client(self):
-        """Configuration du client avec des paramètres réalistes"""
+    def setup_client_advanced(self):
+        """Configuration avancée pour éviter la détection"""
         try:
-            # Settings pour éviter la détection
+            # User agents alternatifs
+            user_agents = [
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1",
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                "Mozilla/5.0 (Linux; Android 13; SM-S901U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36"
+            ]
+            
             settings = {
-                "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1",
+                "user_agent": random.choice(user_agents),
                 "device_settings": {
                     "app_version": "320.0.0.0.0",
-                    "android_version": 34,
-                    "android_release": "14.0",
+                    "android_version": 33,
+                    "android_release": "13.0",
                     "dpi": "480dpi",
                     "resolution": "1080x2400",
                     "manufacturer": "Samsung",
                     "device": "SM-S901U",
                     "model": "SM-S901U",
                 },
-                "country": "US",
-                "locale": "en_US",
-                "timezone_offset": -28800
+                "country": "FR",
+                "locale": "fr_FR",
+                "timezone_offset": 3600,
+                "uuid": self.generate_uuid(),
             }
+            
             self.cl.set_settings(settings)
-            self.cl.delay_range = [10, 20]
+            self.cl.delay_range = [15, 30]  # Délais plus longs
+            self.cl.request_timeout = 30
             return True
         except Exception as e:
-            logger.error(f"❌ Erreur configuration client: {e}")
+            logger.error(f"❌ Erreur configuration: {e}")
+            return False
+    
+    def generate_uuid(self):
+        """Générer un UUID unique"""
+        import uuid
+        return str(uuid.uuid4())
+    
+    def manual_login_flow(self):
+        """Flux de connexion manuel pour contourner CSRF"""
+        try:
+            logger.info("🔄 Tentative de connexion manuelle...")
+            
+            # Supprimer toute session existante
+            if os.path.exists("session.json"):
+                os.remove("session.json")
+            
+            # Réinitialiser le client
+            self.cl = Client()
+            self.setup_client_advanced()
+            
+            # Ajouter des headers personnalisés
+            self.cl.set_contact_signup(False)
+            
+            # Tentative de connexion avec gestion d'erreur
+            time.sleep(10)  # Délai important
+            
+            logger.info(f"🔐 Connexion pour {USERNAME}...")
+            login_result = self.cl.login(USERNAME, PASSWORD)
+            
+            if login_result:
+                logger.info("✅ Connexion réussie!")
+                # Sauvegarder la session
+                self.cl.dump_settings("session.json")
+                return True
+            else:
+                logger.error("❌ Échec de la connexion")
+                return False
+                
+        except ChallengeRequired as e:
+            logger.error("🔐 Challenge Instagram requis - Connecte-toi manuellement sur ton compte")
+            self.last_error = "Challenge de sécurité requis - Vérifie ton compte Instagram"
+            return False
+        except Exception as e:
+            logger.error(f"💥 Erreur connexion: {str(e)}")
+            self.last_error = str(e)
             return False
     
     def safe_login(self):
-        """Connexion sécurisée avec gestion améliorée"""
+        """Connexion sécurisée"""
         try:
-            logger.info("🔐 Tentative de connexion...")
+            logger.info("🔐 Processus de connexion...")
             self.bot_status = "logging_in"
             self.analytics.data["login_attempts"] += 1
             self.analytics.save_analytics()
             
-            # Configuration initiale
-            if not self.setup_client():
-                return False
-            
-            # Supprimer session existante problématique
+            # Essayer d'abord avec une session existante
             if os.path.exists("session.json"):
                 try:
                     self.cl.load_settings("session.json")
-                    # Tester la session
                     user_info = self.cl.account_info()
-                    logger.info(f"✅ Session valide pour: {user_info.username}")
+                    logger.info(f"✅ Session valide: {user_info.username}")
                     self.bot_status = "connected"
                     self.analytics.data["last_login"] = datetime.now().isoformat()
                     self.analytics.save_analytics()
                     return True
                 except Exception as e:
-                    logger.warning(f"🔄 Session invalide: {e}")
+                    logger.warning(f"🔄 Session expirée: {e}")
                     if os.path.exists("session.json"):
                         os.remove("session.json")
             
-            # Nouvelle connexion
-            logger.info("🔄 Connexion avec identifiants...")
-            time.sleep(random.randint(8, 15))
-            
-            if USERNAME and PASSWORD:
-                login_result = self.cl.login(USERNAME, PASSWORD)
-                if login_result:
-                    logger.info("✅ Connexion réussie!")
-                    self.cl.dump_settings("session.json")
-                    self.bot_status = "connected"
-                    self.analytics.data["last_login"] = datetime.now().isoformat()
-                    self.analytics.save_analytics()
-                    return True
-            
-            logger.error("❌ Échec de la connexion")
-            self.bot_status = "login_failed"
-            return False
-            
-        except ChallengeRequired as e:
-            error_msg = "Challenge de sécurité Instagram requis - Connecte-toi manuellement sur ton compte"
-            logger.error(f"🔐 {error_msg}")
-            self.last_error = error_msg
-            self.bot_status = "challenge_required"
-            return False
+            # Connexion manuelle
+            if self.manual_login_flow():
+                self.bot_status = "connected"
+                self.analytics.data["last_login"] = datetime.now().isoformat()
+                self.analytics.save_analytics()
+                return True
+            else:
+                self.bot_status = "login_failed"
+                return False
+                
         except Exception as e:
-            error_msg = str(e)
-            logger.error(f"💥 Erreur de connexion: {error_msg}")
+            error_msg = f"Erreur générale: {str(e)}"
+            logger.error(f"💥 {error_msg}")
             self.last_error = error_msg
             self.bot_status = "error"
             return False
@@ -144,7 +180,7 @@ class SmartInstagramBot:
             "last_login": self.analytics.data["last_login"],
             "last_error": self.last_error,
             "timestamp": datetime.now().isoformat(),
-            "username_set": bool(USERNAME),
+            "username": USERNAME if USERNAME else "non_configuré",
             "message": "Instagram Growth Bot"
         }
 
@@ -158,29 +194,30 @@ def run_bot():
     
     if not USERNAME or not PASSWORD:
         logger.error("❌ Variables d'environnement manquantes")
-        logger.info("💡 Configure INSTAGRAM_USERNAME et INSTAGRAM_PASSWORD sur Railway")
         return
     
     bot_instance = SmartInstagramBot()
     
     # Tentative de connexion
     if bot_instance.safe_login():
-        logger.info("✅ Bot initialisé avec succès")
-        # Ici tu peux ajouter ta logique de follow/like
-        # Pour l'instant, on garde juste le bot connecté
+        logger.info("✅ Bot connecté avec succès!")
+        # Simulation d'activité
         while True:
             try:
-                # Vérifier périodiquement la connexion
-                bot_instance.cl.account_info()
-                bot_instance.bot_status = "connected"
+                # Vérifier la connexion périodiquement
+                if bot_instance.bot_status == "connected":
+                    user_info = bot_instance.cl.account_info()
+                    logger.info(f"🤖 Bot actif - Followers: {user_info.follower_count}")
+                
                 time.sleep(300)  # 5 minutes
+                
             except Exception as e:
                 logger.warning("🔄 Reconnexion nécessaire...")
                 bot_instance.safe_login()
                 time.sleep(60)
     else:
-        logger.error("❌ Impossible de connecter le bot")
-        logger.info("💡 Vérifie tes identifiants et déverrouille ton compte Instagram")
+        logger.error("❌ Échec de la connexion")
+        logger.info("💡 Conseil: Connecte-toi manuellement à Instagram puis réessaie")
 
 # Application Flask
 app = Flask(__name__)
@@ -195,10 +232,9 @@ def home():
             <body style="font-family: Arial, sans-serif; padding: 20px;">
                 <h1>🤖 Bot Instagram Growth</h1>
                 <div style="background: #f0f8ff; padding: 20px; border-radius: 10px;">
-                    <h2>Status: Initialisation en cours...</h2>
-                    <p>Le bot est en cours de démarrage.</p>
+                    <h2>Status: Initialisation...</h2>
+                    <p>Le bot démarre...</p>
                 </div>
-                <p><a href="/health">Health Check</a> | <a href="/status">Status Complet</a></p>
             </body>
         </html>
         """
@@ -218,57 +254,49 @@ def home():
             <h1>🤖 Bot Instagram Growth</h1>
             <div style="background: {status_color}; padding: 20px; border-radius: 10px; margin: 20px 0;">
                 <h2>Status: {info['status'].upper()}</h2>
-                <p><strong>Utilisateur configuré:</strong> {info['username_set']}</p>
+                <p><strong>Utilisateur:</strong> {info['username']}</p>
                 <p><strong>Dernière activité:</strong> {info['timestamp']}</p>
-                <p><strong>Tentatives de connexion:</strong> {info['login_attempts']}</p>
+                <p><strong>Tentatives:</strong> {info['login_attempts']}</p>
                 <p><strong>Dernière connexion:</strong> {info['last_login'] or 'Jamais'}</p>
                 <p><strong>Erreur:</strong> {info['last_error'] or 'Aucune'}</p>
             </div>
-            <p><a href="/health">Health Check</a> | <a href="/status">Status API</a> | <a href="/reconnect">Reconnecter</a></p>
+            <p><a href="/health">Health Check</a> | <a href="/status">Status API</a></p>
+            <div style="margin-top: 20px; padding: 15px; background: #e7f3ff; border-radius: 5px;">
+                <h3>💡 Conseils de dépannage:</h3>
+                <ul>
+                    <li>Vérifie que ton compte Instagram est actif</li>
+                    <li>Connecte-toi manuellement d'abord</li>
+                    <li>Accepte les éventuels challenges de sécurité</li>
+                    <li>Réessaie dans quelques minutes</li>
+                </ul>
+            </div>
         </body>
     </html>
     """
 
 @app.route('/health')
 def health():
-    """Health check endpoint"""
-    return jsonify({
-        "status": "healthy" if bot_instance else "initializing",
-        "timestamp": datetime.now().isoformat(),
-        "service": "instagram-bot"
-    })
+    return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat()})
 
 @app.route('/status')
 def status():
-    """Status complet du bot"""
     if bot_instance is None:
         return jsonify({"status": "not_initialized"})
     return jsonify(bot_instance.get_bot_info())
 
 @app.route('/reconnect')
 def reconnect():
-    """Forcer la reconnexion"""
-    if bot_instance is None:
-        return jsonify({"error": "Bot non initialisé"})
-    
-    success = bot_instance.safe_login()
-    return jsonify({
-        "reconnected": success,
-        "new_status": bot_instance.bot_status,
-        "timestamp": datetime.now().isoformat()
-    })
+    if bot_instance:
+        bot_instance.safe_login()
+        return jsonify({"reconnect_attempted": True, "new_status": bot_instance.bot_status})
+    return jsonify({"error": "Bot non initialisé"})
 
 def start_server():
-    """Démarrer le serveur en production"""
     port = int(os.environ.get("PORT", 8080))
     logger.info(f"🌐 Serveur démarré sur le port {port}")
-    # Utiliser Waitress pour la production
     serve(app, host='0.0.0.0', port=port)
 
 if __name__ == "__main__":
-    # Démarrer le bot dans un thread séparé
     bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
-    
-    # Démarrer le serveur web
     start_server()
