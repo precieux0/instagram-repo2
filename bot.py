@@ -6,6 +6,11 @@ import random
 import json
 import os
 from datetime import datetime, timedelta
+from flask import Flask, jsonify
+import threading
+
+# Configuration Flask
+app = Flask(__name__)
 
 # Configuration logging
 logging.basicConfig(
@@ -33,10 +38,14 @@ class GrowthAnalytics:
                 "daily_comments": 0,
                 "total_followers": 0,
                 "last_reset": datetime.now().isoformat(),
-                "safety_score": 100
+                "safety_score": 100,
+                "bot_status": "running",
+                "last_activity": datetime.now().isoformat(),
+                "total_sessions": 0
             }
     
     def save_analytics(self):
+        self.data["last_activity"] = datetime.now().isoformat()
         with open(self.analytics_file, 'w') as f:
             json.dump(self.data, f, indent=2)
     
@@ -63,6 +72,8 @@ class SmartInstagramBot:
     def __init__(self):
         self.cl = Client()
         self.analytics = GrowthAnalytics()
+        self.bot_status = "initializing"
+        self.last_error = None
         self.setup_safe_client()
         
     def setup_safe_client(self):
@@ -88,6 +99,7 @@ class SmartInstagramBot:
         """Connexion sécurisée"""
         try:
             logger.info("🔐 Connexion sécurisée...")
+            self.bot_status = "logging_in"
             
             # Session existante
             if os.path.exists("session.json"):
@@ -95,6 +107,7 @@ class SmartInstagramBot:
                     self.cl.load_settings("session.json")
                     self.cl.get_timeline_feed()  # Test session
                     logger.info("✅ Session valide")
+                    self.bot_status = "connected"
                     return True
                 except LoginRequired:
                     logger.info("🔄 Session expirée")
@@ -103,13 +116,17 @@ class SmartInstagramBot:
             if self.cl.login(USERNAME, PASSWORD):
                 logger.info("✅ Nouvelle connexion réussie")
                 self.cl.dump_settings("session.json")
+                self.bot_status = "connected"
                 return True
             
             logger.error("❌ Échec connexion")
+            self.bot_status = "login_failed"
             return False
             
         except Exception as e:
             logger.error(f"💥 Erreur connexion: {e}")
+            self.last_error = str(e)
+            self.bot_status = "error"
             return False
     
     def smart_delay(self, min_sec=15, max_sec=45):
@@ -142,6 +159,7 @@ class SmartInstagramBot:
             
         except Exception as e:
             logger.error(f"❌ Erreur recherche: {e}")
+            self.last_error = str(e)
             return []
     
     def engage_with_user(self, user_info):
@@ -188,6 +206,7 @@ class SmartInstagramBot:
             
         except Exception as e:
             logger.error(f"❌ Erreur interaction: {e}")
+            self.last_error = str(e)
             return False
     
     def strategic_unfollow(self):
@@ -218,10 +237,14 @@ class SmartInstagramBot:
                     
         except Exception as e:
             logger.error(f"❌ Erreur unfollow: {e}")
+            self.last_error = str(e)
     
     def daily_growth_session(self):
         """Session de croissance quotidienne"""
         logger.info("🌱 Début session croissance")
+        self.bot_status = "active_session"
+        self.analytics.data["total_sessions"] += 1
+        self.analytics.save_analytics()
         
         # 1. Activités organiques
         target_users = self.find_target_users()
@@ -242,40 +265,114 @@ class SmartInstagramBot:
         
         # 4. Analytics
         logger.info(f"📊 Aujourd'hui: {self.analytics.data['daily_follows']} follows, {self.analytics.data['daily_likes']} likes")
+        self.bot_status = "connected"
 
-def main():
+# Instance globale du bot
+bot_instance = None
+
+def run_bot():
+    """Fonction pour exécuter le bot en arrière-plan"""
+    global bot_instance
     logger.info("🚀 Bot Growth Sécurisé démarré")
     
     if not USERNAME or not PASSWORD:
         logger.error("❌ Configurer USERNAME/PASSWORD")
         return
     
-    bot = SmartInstagramBot()
+    bot_instance = SmartInstagramBot()
     
-    if not bot.safe_login():
+    if not bot_instance.safe_login():
         logger.error("❌ Impossible de démarrer")
         return
     
-    # Routine de croissance
-    session_count = 0
-    while session_count < 4:  # Max 4 sessions par jour
+    # BOUCLE INFINIE pour garder le bot actif
+    while True:
         try:
-            session_count += 1
-            logger.info(f"🔄 Session {session_count}/4")
+            # Routine de croissance quotidienne
+            session_count = 0
+            while session_count < 4:  # Max 4 sessions par jour
+                try:
+                    session_count += 1
+                    logger.info(f"🔄 Session {session_count}/4")
+                    
+                    bot_instance.daily_growth_session()
+                    
+                    # Pause stratégique entre sessions (2-4 heures)
+                    if session_count < 4:
+                        pause = random.randint(7200, 14400)  # 2-4 heures
+                        logger.info(f"💤 Prochaine session dans {pause//3600}h")
+                        time.sleep(pause)
+                        
+                except Exception as e:
+                    logger.error(f"💥 Erreur session: {e}")
+                    bot_instance.last_error = str(e)
+                    bot_instance.bot_status = "error"
+                    time.sleep(1800)  # Attendre 30min
             
-            bot.daily_growth_session()
+            logger.info("🎯 4 sessions quotidiennes terminées - Attente jusqu'à demain")
+            bot_instance.bot_status = "waiting_next_day"
             
-            # Pause stratégique entre sessions (2-4 heures)
-            if session_count < 4:
-                pause = random.randint(7200, 14400)  # 2-4 heures
-                logger.info(f"💤 Prochaine session dans {pause//3600}h")
-                time.sleep(pause)
-                
+            # Attendre jusqu'au lendemain pour recommencer
+            now = datetime.now()
+            tomorrow = now + timedelta(days=1)
+            tomorrow_morning = datetime(tomorrow.year, tomorrow.month, tomorrow.day, 8, 0)  # 8h du matin
+            
+            wait_seconds = (tomorrow_morning - now).total_seconds()
+            logger.info(f"⏰ Prochaine exécution dans {wait_seconds//3600:.1f} heures")
+            time.sleep(wait_seconds)
+            
         except Exception as e:
-            logger.error(f"💥 Erreur session: {e}")
-            time.sleep(1800)  # Attendre 30min
+            logger.error(f"💥 Erreur majeure: {e}")
+            bot_instance.last_error = str(e)
+            bot_instance.bot_status = "error"
+            time.sleep(3600)  # Attendre 1h en cas d'erreur
+
+# Routes Flask pour le monitoring
+@app.route('/')
+def dashboard():
+    """Page d'accueil du dashboard"""
+    if bot_instance is None:
+        return jsonify({
+            "status": "bot_not_initialized",
+            "message": "Bot en cours d'initialisation...",
+            "timestamp": datetime.now().isoformat()
+        })
     
-    logger.info("🎯 4 sessions quotidiennes terminées")
+    return jsonify({
+        "bot_status": bot_instance.bot_status,
+        "analytics": bot_instance.analytics.data,
+        "last_error": bot_instance.last_error,
+        "timestamp": datetime.now().isoformat(),
+        "message": "🤖 Bot Instagram Growth Actif"
+    })
+
+@app.route('/health')
+def health_check():
+    """Endpoint de santé simple"""
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "service": "instagram-growth-bot"
+    })
+
+@app.route('/analytics')
+def analytics():
+    """Endpoint des analytics détaillés"""
+    if bot_instance is None:
+        return jsonify({"error": "Bot non initialisé"})
+    
+    return jsonify(bot_instance.analytics.data)
+
+def start_flask():
+    """Démarrer le serveur Flask"""
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port, debug=False)
 
 if __name__ == "__main__":
-    main()
+    # Démarrer le bot dans un thread séparé
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
+    bot_thread.start()
+    
+    # Démarrer le serveur Flask
+    logger.info("🌐 Démarrage du serveur de monitoring...")
+    start_flask()
