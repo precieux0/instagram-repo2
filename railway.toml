@@ -9,5 +9,5 @@ expose = true
 port = 8080
 
 [variables]
-INSTAGRAM_USERNAME = "del.una99"
-INSTAGRAM_PASSWORD = "precieux243"
+INSTAGRAM_USERNAME = "..."
+INSTAGRAM_PASSWORD = "..."
